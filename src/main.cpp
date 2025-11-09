@@ -1,115 +1,152 @@
 #include <Arduino.h>
 
-const int S1 = 2; // left-most
-const int S2 = 3;
-const int S3 = 4; // center
-const int S4 = 5;
-const int S5 = 6; // right-most
+//pin sensor line follower
+#define S1 6
+#define S2 5
+#define S3 4
+#define S4 3
+#define S5 2
 
-// L298N pins (change as needed)
-const int L_IN1 = 8;  // left motor IN1
-const int L_IN2 = 9;  // left motor IN2
-const int R_IN3 = 10; // right motor IN3
-const int R_IN4 = 11; // right motor IN4
+//pin driver motor
+#define ENA 9   // PWM motor kanan
+#define IN1 7   // motor kanan maju
+#define IN2 10  // motor kanan mundur
 
-// timing
-const unsigned long ACTION_DELAY = 20; // ms between loops
+#define ENB 11  // PWM motor kiri
+#define IN3 8   // motor kiri maju
+#define IN4 12  // motor kiri mundur
+
+// ---------------------------
+// param pid
+// ---------------------------
+float Kp = 10.0;
+float Ki = 0.0;
+float Kd = 3.0;
+
+float error = 0;
+float lastError = 0;
+float integral = 0;
+float derivative = 0;
+float pid = 0;
+
+//kec motor
+int baseSpeed = 80;
+int maxSpeed = 100;
+int minSpeed = 40;
+
+
+void motorLeft(int speed) {
+  speed = constrain(speed, -255, 255);
+  if (speed > 0) {  // maju
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, speed);
+  } else if (speed < 0) {  // mundur
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, -speed);
+  } else {  // berhenti
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, 0);
+  }
+}
+
+void motorRight(int speed) {
+  speed = constrain(speed, -255, 255);
+  if (speed > 0) {  // maju
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, speed);
+  } else if (speed < 0) {  // mundur
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, -speed);
+  } else {  // berhenti
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, 0);
+  }
+}
 
 void setup() {
-  // sensors
+  Serial.begin(9600);
+
   pinMode(S1, INPUT);
   pinMode(S2, INPUT);
   pinMode(S3, INPUT);
   pinMode(S4, INPUT);
   pinMode(S5, INPUT);
 
-  // motors
-  pinMode(L_IN1, OUTPUT);
-  pinMode(L_IN2, OUTPUT);
-  pinMode(R_IN3, OUTPUT);
-  pinMode(R_IN4, OUTPUT);
-
-  stopMotors();
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
 }
 
 void loop() {
-  bool b1 = digitalRead(S1) == HIGH; // true if sensor sees line
-  bool b2 = digitalRead(S2) == HIGH;
-  bool b3 = digitalRead(S3) == HIGH;
-  bool b4 = digitalRead(S4) == HIGH;
-  bool b5 = digitalRead(S5) == HIGH;
+  int s[5];
+  s[0] = digitalRead(S1);
+  s[1] = digitalRead(S2);
+  s[2] = digitalRead(S3);
+  s[3] = digitalRead(S4);
+  s[4] = digitalRead(S5);
 
-  // Priority: center -> slight -> hard
-  if (b3 && !b2 && !b4) {
-    // center only: forward
-    forward();
-  } else if (b2 && b3) {
-    // slight left
-    slightLeft();
-  } else if (b4 && b3) {
-    // slight right
-    slightRight();
-  } else if (b1 || (b2 && !b3)) {
-    // strong left (outer or left without center)
-    hardLeft();
-  } else if (b5 || (b4 && !b3)) {
-    // strong right
-    hardRight();
-  } else if (!b1 && !b2 && !b3 && !b4 && !b5) {
-    // lost line: stop
-    stopMotors();
-  } else {
-    // fallback: go forward
-    forward();
+  int weights[5] = {8, 3, 0, -3, -8};
+  int activeCount = 0;
+  int weightedSum = 0;
+
+  for (int i = 0; i < 5; i++) {
+    if (s[i] == 0) { // hitam terdeteksi
+      weightedSum += weights[i];
+      activeCount++;
+    }
   }
 
-  delay(ACTION_DELAY);
-}
+  if(activeCount == 0){
+    pid = 0;
+    error = 0;
+  }else{
+  error = (float)weightedSum / activeCount;
 
-/* Motor action helpers - fixed on/off */
-void forward() {
-  // LEFT forward
-  digitalWrite(L_IN1, HIGH);
-  digitalWrite(L_IN2, LOW);
-  // RIGHT forward
-  digitalWrite(R_IN3, HIGH);
-  digitalWrite(R_IN4, LOW);
-}
+  integral += error;
+  derivative = error - lastError;
+  pid = (Kp * error) + (Ki * integral) + (Kd * derivative);
+  lastError = error;
+  }
 
-void slightLeft() {
-  // slow-ish: left stop, right forward
-  digitalWrite(L_IN1, LOW);
-  digitalWrite(L_IN2, LOW);
-  digitalWrite(R_IN3, HIGH);
-  digitalWrite(R_IN4, LOW);
-}
 
-void slightRight() {
-  digitalWrite(L_IN1, HIGH);
-  digitalWrite(L_IN2, LOW);
-  digitalWrite(R_IN3, LOW);
-  digitalWrite(R_IN4, LOW);
-}
 
-void hardLeft() {
-  // spin-left: left backward, right forward
-  digitalWrite(L_IN1, LOW);
-  digitalWrite(L_IN2, HIGH);
-  digitalWrite(R_IN3, HIGH);
-  digitalWrite(R_IN4, LOW);
-}
+  int leftSpeed = baseSpeed - pid;
+  int rightSpeed = baseSpeed + pid;
 
-void hardRight() {
-  // spin-right: left forward, right backward
-  digitalWrite(L_IN1, HIGH);
-  digitalWrite(L_IN2, LOW);
-  digitalWrite(R_IN3, LOW);
-  digitalWrite(R_IN4, HIGH);
-}
+  leftSpeed = constrain(leftSpeed, -maxSpeed, maxSpeed);
+  rightSpeed = constrain(rightSpeed, -maxSpeed, maxSpeed);
 
-void stopMotors() {
-  digitalWrite(L_IN1, LOW);
-  digitalWrite(L_IN2, LOW);
-  digitalWrite(R_IN3, LOW);
-  digitalWrite(R_IN4, LOW);
+  motorLeft(leftSpeed);
+  motorRight(rightSpeed);
+
+
+
+  //monitor sensor
+  Serial.print("Sensors: ");
+  for (int i = 0; i < 5; i++) {
+    Serial.print(s[i]);
+    Serial.print(" ");
+  }
+  Serial.print(" | Err: "); Serial.print(error);
+  Serial.print(" | PID: "); Serial.print(pid);
+  Serial.print(" | L: "); Serial.print(leftSpeed);
+  Serial.print(" | R: "); Serial.println(rightSpeed);
+
+  Serial.print(digitalRead(S1)); Serial.print(" ");
+  Serial.print(digitalRead(S2)); Serial.print(" ");
+  Serial.print(digitalRead(S3)); Serial.print(" ");
+  Serial.print(digitalRead(S4)); Serial.print(" ");
+  Serial.println(digitalRead(S5));
+  delay(200);
+
+  delay(50);
 }
